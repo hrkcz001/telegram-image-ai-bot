@@ -1,18 +1,19 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ViewPatterns #-}
 
 module Logic (
     InitOpts(..),
+    Admins(..),
     process
 ) where
 
 import Update (Stack, popUpdate, putError)
 import Connection (Token, Photo2Send(..), Msg2Send(..), sendMessage, sendPhoto)
 
-import Data.Text (Text, unpack, take, drop)
+import Data.Text (Text, unpack, take, drop, length)
 import Data.Aeson
 import Data.Aeson.Lens
 import Control.Lens hiding ((.=))
+import Control.Concurrent.MVar
 import Control.Concurrent (threadDelay, forkIO)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 
@@ -25,7 +26,7 @@ data State = State  {   stateToken :: Token
                     ,   stateScript :: Text
                     ,   stateOutput :: Text
                     ,   statePassword :: Text
-                    ,   stateAdmins :: Admins
+                    ,   stateAdmins :: MVar Admins
                     }
 
 data InitOpts = InitOpts    {   initStack :: Stack
@@ -33,29 +34,23 @@ data InitOpts = InitOpts    {   initStack :: Stack
                             ,   initScript :: Text
                             ,   initOutput :: Text
                             ,   initPassword :: Text
-                            ,   initAdmins :: [Text]
+                            ,   initAdminsNames :: [Text]
+                            ,   initAdminsIds :: [Int]
                             }
 
-initState :: IO State
-initState = do
-                return $ State "" "" "" "" ( Admins [] [] )
-
-process :: InitOpts -> IO ()
+process :: InitOpts -> IO (MVar Admins)
 process InitOpts    { initStack = stack
                     , initToken = token
                     , initScript = script
                     , initOutput = output
                     , initPassword = password
-                    , initAdmins = admins }  
+                    , initAdminsNames = adminsNames 
+                    , initAdminsIds = adminsIds}  
                     = do
-                    emptyState <- initState
-                    let state = emptyState  { stateToken = token 
-                                            , stateScript = script
-                                            , stateOutput = output
-                                            , statePassword = password
-                                            , stateAdmins = Admins [] admins }
+                    adminsMVar <- newMVar $ Admins adminsIds adminsNames
+                    let state = State token script output password adminsMVar
                     _ <- forkIO $ processLoop stack state
-                    return ()
+                    return adminsMVar
 
 processLoop :: Stack -> State -> IO ()
 processLoop stack state = do
@@ -65,81 +60,73 @@ processLoop stack state = do
                                     threadDelay 1000000
                                     processLoop stack state
                         Just val -> do
-                                    newState <- processMessage stack state val
-                                    processLoop stack newState
+                                    _ <- forkIO $ processMessage stack state val
+                                    processLoop stack state
 
-processMessage :: Stack -> State -> Value -> IO State
+processMessage :: Stack -> State -> Value -> IO ()
 processMessage stack state message = do
     case message ^? key "message" of
-        Just msg -> case msg ^? key "text" . _String of
-                        Just text -> case text of
-                                        (first 1 -> "!") -> return state
-                                        (first 5 -> "/ping") -> do
-                                                            response <- formEchoResponse msg
-                                                            result <- sendMessage token $ response
-                                                            case result of
-                                                                Right _ -> return state
-                                                                Left e -> do
-                                                                        putError stack e
-                                                                        return state
-                                        (login -> True) -> do
-                                                            response <- formLoginResponse msg 
-                                                            result <- sendMessage token $ response
-                                                            case result of
-                                                                Right _ -> return $ state { stateAdmins = appendAdmin admins msg }
-                                                                Left e -> do
-                                                                        putError stack e
-                                                                        return state
-                                        _ ->
-                                                if isAdmin admins msg
-                                                    then
-                                                        do
-                                                            response <- formResponse msg 
-                                                                                     (stateScript state) 
-                                                                                     (stateOutput state)
-                                                                                     text
-                                                            result <- sendPhoto token $ response
-                                                            case result of
-                                                                Right _ -> return state
-                                                                Left e -> do
-                                                                        putError stack e
-                                                                        return state
-                                                    else do
-                                                            response <- formNotLoggedInResponse msg
-                                                            result <- sendMessage token $ response
-                                                            case result of
-                                                                Right _ -> return state
-                                                                Left e -> do
-                                                                        putError stack e
-                                                                        return state
-                        _ -> do
-                                response <- formQuestionResponse msg
-                                result <- sendMessage token $ response
-                                case result of
-                                    Right _ -> return state
-                                    Left e -> do
-                                            putError stack e
-                                            return state
-                        where 
-                            token = stateToken state
-                            passwd = statePassword state
-                            admins = stateAdmins state
-                            first n = unpack . Data.Text.take n
-                            login = (==) $ "/login " <> passwd
-        _ -> return state
+        (Just msg) ->
+            case msg ^? key "text" . _String of
+                (Just text) -> processTextMessage stack state text msg
+                _ -> do
+                    response <- formQuestionResponse msg
+                    result <- sendMessage token response
+                    case result of
+                        Right _ -> return ()
+                        Left e -> putError stack e
+        _ -> return ()
+    where
+        token = stateToken state
 
-appendAdmin :: Admins -> Value -> Admins
-appendAdmin admins msg = if isAdmin admins msg
-                         then    admins
-                         else    Admins 
-                                 (adminsId admins ++ appendId)
-                                 (adminsName admins ++ appendName)
-    where   appendId = case msg ^? key "chat" . key "id" . _Integral of
-                            Just adminId -> [adminId | adminId `notElem` adminsId admins]
-                            Nothing -> []
-            appendName = case senderLogin msg of
-                            Just name -> [name | name `notElem` adminsName admins]
-                            Nothing -> []
+processTextMessage :: Stack -> State -> Text -> Value -> IO ()
+processTextMessage stack state text msg
+    | text `match` "!" = return ()
+    | text `match` "/ping" = do
+        response <- formEchoResponse text msg
+        result <- sendMessage token response
+        case result of
+            Right _ -> return ()
+            Left e -> putError stack e
+    | login text = do
+        appendAdmin (stateAdmins state) msg
+        response <- formLoginResponse msg
+        result <- sendMessage token response
+        case result of
+            Right _ -> return ()
+            Left e -> putError stack e
+    | otherwise = do
+        admins <- readMVar $ stateAdmins state
+        if isAdmin admins msg
+            then do
+                response <- formResponse msg (stateScript state) (stateOutput state) text
+                result <- sendPhoto token response
+                case result of
+                    Right _ -> return ()
+                    Left e -> putError stack e
+            else do
+                response <- formNotLoggedInResponse msg
+                result <- sendMessage token response
+                case result of
+                    Right _ -> return ()
+                    Left e -> putError stack e
+    where
+        token = stateToken state
+        login t = t == "/login " <> statePassword state
+        match t c = Data.Text.take (Data.Text.length c) t == c
+
+appendAdmin :: MVar Admins -> Value -> IO ()
+appendAdmin adminsMVar msg = do 
+                    admins <- takeMVar adminsMVar
+                    let newAdmins = Admins (appendId admins) (appendName admins)
+                    putMVar adminsMVar newAdmins
+
+    where   appendId admins = case msg ^? key "chat" . key "id" . _Integral of
+                            Just adminId -> adminsId admins ++ [adminId | adminId `notElem` adminsId admins]
+                            Nothing -> adminsId admins
+            appendName admins = case senderLogin msg of
+                            Just name -> adminsName admins ++ [name | name `notElem` adminsName admins]
+                            Nothing -> adminsName admins
 
 isAdmin :: Admins -> Value -> Bool
 isAdmin admins msg = idMatch || nameMatch 
@@ -175,9 +162,9 @@ formNotLoggedInResponse msg = do
                                     (Just (msg ^?! key "message_id" . _Integral))
                                     "Not logged in!"
 
-formEchoResponse :: Value -> IO Msg2Send
-formEchoResponse msg = do
-                    let msgText = Data.Text.drop 6 (msg ^?! key "text" . _String)
+formEchoResponse :: Text -> Value -> IO Msg2Send
+formEchoResponse text msg = do
+                    let msgText = Data.Text.drop 6 text
                     if msgText == ""
                         then return $ Msg2Send
                                     (msg ^?! key "chat" . key "id" . _Integral)
@@ -198,7 +185,7 @@ formQuestionResponse msg = do
 execPython :: Text -> Text -> Text -> IO String
 execPython path output prompt = do
     posixTime <- getPOSIXTime
-    let outputFile = (unpack output) ++ (show posixTime)
+    let outputFile = unpack output ++ show posixTime
     let opts = [unpack path, outputFile , unpack prompt]
     (_, Just hout, _, ph) <- P.createProcess (proc "python3" opts) { std_out = P.CreatePipe }
     _ <- P.waitForProcess ph

@@ -12,6 +12,7 @@ author:         hrkcz001
 maintainer:     hrkcz001@google.com
 copyright:      2023 hrkcz001
 license:        BSD3
+license-file:   LICENSE
 build-type:     Simple
 
 source-repository head
@@ -20,6 +21,7 @@ source-repository head
 
 library
   exposed-modules:
+      Configuration
       Connection
       Logic
       Update
