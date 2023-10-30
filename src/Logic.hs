@@ -185,7 +185,7 @@ formQuestionResponse msg = do
 execPython :: Text -> Text -> Text -> IO String
 execPython path output prompt = do
     posixTime <- getPOSIXTime
-    let outputFile = unpack output ++ show posixTime
+    let outputFile = unpack output ++ "/" ++ show posixTime ++ ".png"
     let opts = [unpack path, outputFile , unpack prompt]
     (_, Just hout, _, ph) <- P.createProcess (proc "python3" opts) { std_out = P.CreatePipe }
     _ <- P.waitForProcess ph
