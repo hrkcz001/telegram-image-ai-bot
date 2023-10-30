@@ -14,7 +14,7 @@ import System.Environment (getArgs)
 main :: IO ()
 main = do
         args <- getArgs
-        let configPath = if length args > 0 then args !! 0 else "config.json"
+        let configPath = if not (null args) then head args else "config.json"
         readConfigAttempt <- readConfig configPath
         case readConfigAttempt of
             Nothing -> return ()
