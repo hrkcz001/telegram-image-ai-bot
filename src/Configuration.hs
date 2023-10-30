@@ -7,13 +7,11 @@ module Configuration (
 ) where
 
 import qualified Data.ByteString.Lazy as B
-import Logic (Admins(..))
 import Data.Aeson
 import GHC.Generics
 import Control.Exception as E
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar
-import Data.Text (unpack)
 
 data Config = Config
   { configToken :: String
@@ -66,17 +64,17 @@ readConfig filePath = do
                                     putStrLn "Config file read successfully."
                                     return config
 
-updateConfigLoop :: FilePath -> Int -> Config -> MVar Admins -> IO ()
-updateConfigLoop filePath delay config adminsMVar = do
+updateConfigLoop :: FilePath -> Int -> Config -> MVar [Int] -> IO ()
+updateConfigLoop filePath delay config adminsIdsMVar = do
     threadDelay $ delay * 1000000
-    admins <- readMVar adminsMVar
+    adminsIds <- readMVar $ adminsIdsMVar
     let newConfig = Config { configToken = configToken config
                            , configTimeout = configTimeout config
                            , configScript = configScript config
                            , configOutput = configOutput config
                            , configPassword = configPassword config
-                           , configAdminsNames = map unpack $ adminsName admins
-                           , configAdminsIds = adminsId admins
+                           , configAdminsNames = configAdminsNames config
+                           , configAdminsIds = adminsIds
                            }
     B.writeFile filePath (encode newConfig)
-    updateConfigLoop filePath delay newConfig adminsMVar
+    updateConfigLoop filePath delay newConfig adminsIdsMVar

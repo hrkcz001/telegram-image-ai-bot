@@ -5,7 +5,7 @@ module Main (main) where
 import Connection (Token)
 import Configuration (Config(..), readConfig, updateConfigLoop)
 import Update (InitOpts(..), Stack, init, popError)
-import Logic (InitOpts(..), Admins(..), process)
+import Logic (InitOpts(..), process)
 import Control.Concurrent (threadDelay)
 import Data.Text (Text, pack)
 import Control.Concurrent.MVar
@@ -36,7 +36,7 @@ main = do
 initBot :: Token -> Int -> IO Stack
 initBot token timeout = Update.init $ Update.InitOpts token timeout
 
-initLogic :: Token -> Stack -> Text -> Text -> Text -> [Text] -> [Int] -> IO (MVar Admins)
+initLogic :: Token -> Stack -> Text -> Text -> Text -> [Text] -> [Int] -> IO (MVar [Int])
 initLogic token stack script output password adminsNames adminsIds = 
     Logic.process $ Logic.InitOpts stack token script output password adminsNames adminsIds
 
