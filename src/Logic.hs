@@ -20,13 +20,13 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Process as P
 import System.IO as IO
 
-data Admins = Admins { adminsId :: [Int], adminsName :: [Text] }
+data Admins = Admins { adminsId :: MVar [Int], adminsName :: [Text] }
 
 data State = State  {   stateToken :: Token
                     ,   stateScript :: Text
                     ,   stateOutput :: Text
                     ,   statePassword :: Text
-                    ,   stateAdmins :: MVar Admins
+                    ,   stateAdmins :: Admins
                     }
 
 data InitOpts = InitOpts    {   initStack :: Stack
@@ -38,7 +38,7 @@ data InitOpts = InitOpts    {   initStack :: Stack
                             ,   initAdminsIds :: [Int]
                             }
 
-process :: InitOpts -> IO (MVar Admins)
+process :: InitOpts -> IO (MVar [Int])
 process InitOpts    { initStack = stack
                     , initToken = token
                     , initScript = script
@@ -47,10 +47,11 @@ process InitOpts    { initStack = stack
                     , initAdminsNames = adminsNames 
                     , initAdminsIds = adminsIds}  
                     = do
-                    adminsMVar <- newMVar $ Admins adminsIds adminsNames
-                    let state = State token script output password adminsMVar
+                    adminsIdsMVar <- newMVar adminsIds
+                    let admins = Admins adminsIdsMVar adminsNames
+                    let state = State token script output password admins
                     _ <- forkIO $ processLoop stack state
-                    return adminsMVar
+                    return adminsIdsMVar
 
 processLoop :: Stack -> State -> IO ()
 processLoop stack state = do
@@ -89,15 +90,15 @@ processTextMessage stack state text msg
             Right _ -> return ()
             Left e -> putError stack e
     | login text = do
-        appendAdmin (stateAdmins state) msg
+        appendAdmin admins msg
         response <- formLoginResponse msg
         result <- sendMessage token response
         case result of
             Right _ -> return ()
             Left e -> putError stack e
     | otherwise = do
-        admins <- readMVar $ stateAdmins state
-        if isAdmin admins msg
+        isAdmin <- checkIfIsAdmin admins msg
+        if isAdmin
             then do
                 response <- formResponse msg (stateScript state) (stateOutput state) text
                 result <- sendPhoto token response
@@ -112,28 +113,28 @@ processTextMessage stack state text msg
                     Left e -> putError stack e
     where
         token = stateToken state
+        admins = stateAdmins state
         login t = t == "/login " <> statePassword state
         match t c = Data.Text.take (Data.Text.length c) t == c
 
-appendAdmin :: MVar Admins -> Value -> IO ()
-appendAdmin adminsMVar msg = do 
-                    admins <- takeMVar adminsMVar
-                    let newAdmins = Admins (appendId admins) (appendName admins)
-                    putMVar adminsMVar newAdmins
+appendAdmin :: Admins -> Value -> IO ()
+appendAdmin admins msg = do 
+                    adminsIdsMVar <- takeMVar (adminsId admins)
+                    putMVar (adminsId admins) (appendId adminsIdsMVar)
 
-    where   appendId admins = case msg ^? key "chat" . key "id" . _Integral of
-                            Just adminId -> adminsId admins ++ [adminId | adminId `notElem` adminsId admins]
-                            Nothing -> adminsId admins
-            appendName admins = case senderLogin msg of
-                            Just name -> adminsName admins ++ [name | name `notElem` adminsName admins]
-                            Nothing -> adminsName admins
+    where   appendId adminsIds = case msg ^? key "chat" . key "id" . _Integral of
+                            Just adminId -> adminsIds ++ [adminId | adminId `notElem` adminsIds]
+                            Nothing -> adminsIds
 
-isAdmin :: Admins -> Value -> Bool
-isAdmin admins msg = idMatch || nameMatch 
-    where   idMatch   = case msg ^? key "chat" . key "id" . _Integral of
-                            Just adminId -> adminId `elem` adminsId admins
+checkIfIsAdmin :: Admins -> Value -> IO Bool
+checkIfIsAdmin admins msg = do
+                    adminsIds <- readMVar (adminsId admins)
+                    let idMatch = case msg ^? key "chat" . key "id" . _Integral of
+                            Just adminId -> adminId `elem` adminsIds
                             Nothing -> False
-            nameMatch = case senderLogin msg of
+                    return (idMatch || nameMatch)
+                    where
+                        nameMatch = case senderLogin msg of
                             Just name -> name `elem` adminsName admins
                             Nothing -> False
 
@@ -186,8 +187,9 @@ execPython :: Text -> Text -> Text -> IO String
 execPython path output prompt = do
     posixTime <- getPOSIXTime
     let outputFile = unpack output ++ "/" ++ show posixTime ++ ".png"
-    let opts = [unpack path, outputFile , unpack prompt]
-    (_, Just hout, _, ph) <- P.createProcess (proc "python3" opts) { std_out = P.CreatePipe }
+    let opts = [unpack path, unpack prompt]
+    let envVars = Just [("IMAGINE_OUTPUT", outputFile)]
+    (_, Just hout, _, ph) <- P.createProcess (proc "python3" opts) { std_out = P.CreatePipe, env = envVars}
     _ <- P.waitForProcess ph
     cmdline <- IO.hGetContents hout
     putStrLn cmdline
