@@ -1,0 +1,68 @@
+name:                telegram-image-ai-bot
+version:             0.1.0.0
+github:              "hrkcz001/telegram-image-ai-bot"
+license:             BSD3
+author:              "hrkcz001"
+maintainer:          "hrkcz001@google.com"
+copyright:           "2023 hrkcz001"
+
+  #extra-source-files:
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+#description:         Please see the README on GitHub at <https://github.com/githubuser/telegram-delay-bot#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+- process
+- wreq
+- bytestring
+- aeson
+- containers
+- lens
+- lens-aeson
+- vector
+- text
+- scientific
+- time
+
+ghc-options:
+- -Wall
+- -Wcompat
+- -Widentities
+- -Wincomplete-record-updates
+- -Wincomplete-uni-patterns
+- -Wmissing-export-lists
+- -Wmissing-home-modules
+- -Wpartial-fields
+- -Wredundant-constraints
+
+library:
+  source-dirs: src
+
+executables:
+  telegram-iamge-ai-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - telegram-image-ai-bot
+
+#tests:
+#  telegram-delay-bot-test:
+#    main:                Spec.hs
+#    source-dirs:         test
+#    ghc-options:
+#    - -threaded
+#    - -rtsopts
+#    - -with-rtsopts=-N
+#    dependencies:
+#    - telegram-delay-bot
