@@ -20,7 +20,7 @@ main = do
             Nothing -> return ()
             Just config -> do
                         stack <- initBot token updateTimeout
-                        admins <- initLogic token stack script input output password adminsNames adminsIds
+                        admins <- initLogic token stack script input output password waitingFotPhoto adminsNames adminsIds
                         _ <- updateConfigLoop configPath delay config admins
                         errorLoop stack
                         where 
@@ -31,15 +31,16 @@ main = do
                             input = pack $ configInput config
                             output = pack $ configOutput config
                             password = pack $ configPassword config
+                            waitingForPhoto = configWaitingForPhoto config
                             adminsNames = map pack $ configAdminsNames config
                             adminsIds = configAdminsIds config
 
 initBot :: Token -> Int -> IO Stack
 initBot token timeout = Update.init $ Update.InitOpts token timeout
 
-initLogic :: Token -> Stack -> Text -> Text -> Text -> Text -> [Text] -> [Int] -> IO (MVar [Int])
-initLogic token stack script input output password adminsNames adminsIds = 
-    Logic.process $ Logic.InitOpts stack token script input output password adminsNames adminsIds
+initLogic :: Token -> Stack -> Text -> Text -> Text -> Text -> Int -> [Text] -> [Int] -> IO (MVar [Int])
+initLogic token stack script input output password waitingForPhoto adminsNames adminsIds = 
+    Logic.process $ Logic.InitOpts stack token script input output password waitingForPhoto updateTimeout adminsNames adminsIds
 
 errorLoop :: Stack -> IO ()
 errorLoop stack = do

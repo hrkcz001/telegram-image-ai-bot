@@ -35,6 +35,8 @@ library
     , base >=4.7 && <5
     , bytestring
     , containers
+    , extra
+    , hashmap
     , lens
     , lens-aeson
     , process
@@ -57,6 +59,8 @@ executable telegram-iamge-ai-exe
     , base >=4.7 && <5
     , bytestring
     , containers
+    , extra
+    , hashmap
     , lens
     , lens-aeson
     , process

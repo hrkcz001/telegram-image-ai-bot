@@ -10,11 +10,14 @@ import Update (Stack, popUpdate, putError)
 import Connection (Token, Photo2Send(..), Msg2Send(..), getFile, sendMessage, sendPhoto, downloadFile)
 
 import Data.Text (Text, pack, unpack, take, drop, length, takeWhile)
+import Data.List (singleton)
 import qualified Data.Vector as Vector
+import qualified Data.HashMap as HashMap
 import Data.Aeson
 import Data.Aeson.Lens
 import Control.Lens hiding ((.=))
 import Control.Concurrent.MVar
+import qualified Control.Monad.Extra as ME
 import Control.Concurrent (threadDelay, forkIO)
 import Network.Wreq
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -24,12 +27,16 @@ import System.IO as IO
 
 data Admins = Admins { adminsId :: MVar [Int], adminsName :: [Text] }
 
+type Photos = MVar (HashMap.Map Int [Text])
+
 data State = State  {   stateToken :: Token
                     ,   stateScript :: Text
                     ,   stateInput :: Text
                     ,   stateOutput :: Text
                     ,   statePassword :: Text
+                    ,   stateWaitingForPhoto :: Int
                     ,   stateAdmins :: Admins
+                    ,   statePhotos :: Photos
                     ,   stateLock :: MVar Int
                     }
 
@@ -39,6 +46,8 @@ data InitOpts = InitOpts    {   initStack :: Stack
                             ,   initInput :: Text
                             ,   initOutput :: Text
                             ,   initPassword :: Text
+                            ,   initWaitingForPhoto :: Int
+                            ,   initUpdateTimeout :: Int
                             ,   initAdminsNames :: [Text]
                             ,   initAdminsIds :: [Int]
                             }
@@ -50,13 +59,15 @@ process InitOpts    { initStack = stack
                     , initInput = input
                     , initOutput = output
                     , initPassword = password
+                    , initWaitingForPhoto = waitingForPhoto
                     , initAdminsNames = adminsNames 
                     , initAdminsIds = adminsIds}  
                     = do
                     adminsIdsMVar <- newMVar adminsIds
                     lock <- newMVar 0
+                    photos <- newMVar HashMap.empty
                     let admins = Admins adminsIdsMVar adminsNames
-                    let state = State token script input output password admins lock
+                    let state = State token script input output password waitingForPhoto admins photos lock
                     _ <- forkIO $ processLoop stack state
                     return adminsIdsMVar
 
@@ -79,15 +90,30 @@ processMessage stack state message = do
                 (Just text) -> processTextMessage stack state text msg
                 _ -> case msg ^? key "caption" . _String of
                     (Just text) -> processTextMessage stack state text msg
-                    _ -> do
-                        response <- formQuestionResponse msg
-                        result <- sendMessage token response
-                        case result of
-                            Right _ -> return ()
-                            Left e -> putError stack e
+                    _ -> case getPhotoId msg of
+                        Just (chatId, photoId) -> do
+                            photos <- takeMVar (statePhotos state)
+                            putMVar (statePhotos state) (HashMap.insertWith (++) chatId [photoId] photos)
+                            _ <- forkIO $ forgetPhoto state (chatId, photoId)
+                            return ()
+                        _ -> do
+                            response <- formQuestionResponse message
+                            result <- sendMessage token response
+                            case result of
+                                Right _ -> return ()
+                                Left e -> putError stack e
         _ -> return ()
     where
         token = stateToken state
+
+forgetPhoto :: State -> (Int, Text) -> IO ()
+forgetPhoto state (chatId, photoId) = do
+    threadDelay (stateWaitingForPhoto state * 2000000)
+    photos <- takeMVar (statePhotos state)
+    putMVar (statePhotos state) (HashMap.update (removePhoto photoId) chatId photos)
+    return ()
+    where
+        removePhoto p photoIds = Just (filter (/= p) photoIds)
 
 processTextMessage :: Stack -> State -> Text -> Value -> IO ()
 processTextMessage stack state text msg
@@ -116,18 +142,31 @@ processTextMessage stack state text msg
         preparationResult <- sendMessage token preparationResponse
         case preparationResult of
             Right _ -> do
+                    threadDelay (waitingForPhoto * 1000000)
                     _ <- takeMVar (stateLock state)
                     processingResponse <- formTextResponse msg "Processing..."
                     processingResult <- sendMessage token processingResponse
                     case processingResult of
                         Right _ ->  do
-                                    photo <- getPhoto token stack (stateInput state) msg
-                                    response <- formPythonResponse msg (stateScript state) (stateOutput state) (Data.Text.drop 1 text) photo 
-                                    putMVar (stateLock state) 0
-                                    result <- sendPhoto token response
-                                    case result of
-                                        Right _ -> return ()
-                                        Left e -> putError stack e
+                                    let photoId = getPhotoId msg
+                                    photo <- downloadPhoto token stack input photoId
+                                    case photo of
+                                        Nothing -> do
+                                                response <- formPythonResponse msg script output (Data.Text.drop 1 text) []
+                                                putMVar (stateLock state) 0
+                                                result <- sendPhoto token response
+                                                case result of
+                                                    Right _ -> return ()
+                                                    Left e -> putError stack e
+                                        Just photoPath -> do
+                                                prevPhotos <- getPhotos token stack output photos chatId
+                                                let photosPaths = prevPhotos ++ [photoPath]
+                                                response <- formPythonResponse msg script output (Data.Text.drop 1 text) photosPaths
+                                                putMVar (stateLock state) 0
+                                                result <- sendPhoto token response
+                                                case result of
+                                                    Right _ -> return ()
+                                                    Left e -> putError stack e
                         Left e -> do
                                     putMVar (stateLock state) 0
                                     putError stack e
@@ -144,6 +183,12 @@ processTextMessage stack state text msg
         admins = stateAdmins state
         login = text == "/login " <> statePassword state
         match c = Data.Text.take (Data.Text.length c) text == c
+        photos = statePhotos state
+        input = stateInput state
+        output = stateOutput state
+        script = stateScript state
+        waitingForPhoto = stateWaitingForPhoto state
+        chatId = msg ^?! key "chat" . key "id" . _Integral
         adminCommand command = do
             isAdmin <- checkIfIsAdmin admins msg
             if isAdmin
@@ -179,12 +224,26 @@ checkIfIsAdmin admins msg = do
 senderLogin :: Value -> Maybe Text
 senderLogin msg = msg ^? key "from" . key "username" . _String
 
-getPhoto :: Token -> Stack -> Text -> Value -> IO (Maybe String)
-getPhoto token stack downloadDir msg = do
-                let photoId = handlePhotos =<<(msg ^? key "photo")
-                case photoId of
-                    Nothing -> return Nothing
-                    Just p -> downloadPhoto token stack downloadDir p
+getPhotoId :: Value -> Maybe (Int, Text)
+getPhotoId msg = addSenderId =<< (handlePhotos =<< (msg ^? key "photo"))
+                 where addSenderId photoId = Just ( msg ^?! key "chat" . key "id" . _Integral
+                                                  , photoId)
+
+getPhotos :: Token -> Stack -> Text -> Photos -> Int -> IO [String]
+getPhotos token stack downloadDir photosMVar chatId = do 
+                                                photos <- takeMVar photosMVar
+                                                let newPhotos = HashMap.delete chatId photos
+                                                putMVar photosMVar newPhotos
+                                                print photos
+                                                case HashMap.lookup chatId photos of
+                                                    Just photoIds -> do
+                                                        photosPaths <- mapM downloadSingle photoIds
+                                                        return $ concat photosPaths
+                                                    Nothing -> return [] 
+                                                    where
+                                                        downloadSingle photoId = 
+                                                            ME.maybeM (return []) (return . Data.List.singleton) $
+                                                            downloadPhoto token stack downloadDir (Just (chatId, photoId))
 
 handlePhotos :: Value -> Maybe Text
 handlePhotos (Array photo) = Just $ handlePhoto (Vector.last photo)
@@ -192,30 +251,33 @@ handlePhotos (Array photo) = Just $ handlePhoto (Vector.last photo)
                                 handlePhoto p = p ^?! key "file_id" . _String
 handlePhotos _ = Nothing
 
-downloadPhoto :: Token -> Stack -> Text -> Text -> IO (Maybe String)
-downloadPhoto token stack downloadDir photoId = do
-                    getFileAttempt <- getFile token photoId
-                    case getFileAttempt of
-                        Right responseFile -> do
-                            posixTime <- getPOSIXTime
-                            let fileId = responseFile ^?! responseBody ^?! key "result" . key "file_path" . _String
-                            let downloadPhotoUrl = downloadFile token (unpack fileId)
-                            let pathToPhoto = show posixTime ++ ".jpg"
-                            (_, Just hout, _, ph) <- P.createProcess (proc "wget" ["-O", unpack downloadDir ++ "/" ++ pathToPhoto, downloadPhotoUrl]) 
-                                { std_out = P.CreatePipe }
-                            _ <- P.waitForProcess ph
-                            cmdline <- IO.hGetContents hout
-                            putStrLn cmdline
-                            return $ Just pathToPhoto
-                        Left e -> do
-                            putError stack e
-                            return Nothing
+downloadPhoto :: Token -> Stack -> Text -> Maybe (Int, Text) -> IO (Maybe String)
+downloadPhoto token stack downloadDir maybePhotoId = do
+                    case maybePhotoId of
+                        Nothing -> return Nothing
+                        Just (_, photoId) -> do
+                            getFileAttempt <- getFile token photoId
+                            case getFileAttempt of
+                                Right responseFile -> do
+                                    posixTime <- getPOSIXTime
+                                    let fileId = responseFile ^?! responseBody ^?! key "result" . key "file_path" . _String
+                                    let downloadPhotoUrl = downloadFile token (unpack fileId)
+                                    let pathToPhoto = show posixTime ++ ".jpg"
+                                    (_, Just hout, _, ph) <- P.createProcess (proc "wget" ["-O", unpack downloadDir ++ "/" ++ pathToPhoto, downloadPhotoUrl]) 
+                                        { std_out = P.CreatePipe }
+                                    _ <- P.waitForProcess ph
+                                    cmdline <- IO.hGetContents hout
+                                    putStrLn cmdline
+                                    return $ Just pathToPhoto
+                                Left e -> do
+                                    putError stack e
+                                    return Nothing
 
-formPythonResponse :: Value -> Text -> Text -> Text -> Maybe String -> IO Photo2Send
-formPythonResponse msg script output text photo = do
+formPythonResponse :: Value -> Text -> Text -> Text -> [String] -> IO Photo2Send
+formPythonResponse msg script output text photos = do
                     let command = Data.Text.takeWhile (/= ' ') text
                     let prompt = Data.Text.drop (Data.Text.length command + 1) text
-                    pythonResult <- execPython script command output prompt photo
+                    pythonResult <- execPython script command output prompt photos
                     return $ Photo2Send
                                     (msg ^?! key "chat" . key "id" . _Integral)
                                     (Just (msg ^?! key "message_id" . _Integral))
@@ -276,14 +338,12 @@ formQuestionResponse msg = do
                                     (Just (msg ^?! key "message_id" . _Integral))
                                     "???"
 
-execPython :: Text -> Text -> Text -> Text -> Maybe String -> IO String
-execPython path command output prompt photo = do
+execPython :: Text -> Text -> Text -> Text -> [String] -> IO String
+execPython path command output prompt photos = do
     let promptOpt = case prompt of
                 "" -> []
                 _ -> ["-p", prompt]
-    let photoOpt = case photo of
-                Just p -> ["-i", "/home/damakm/TelegramImageAiBot/downloads/" ++ p]
-                Nothing -> []
+    let photoOpt = concatMap (\p -> ["-i", "/home/damakm/TelegramImageAiBot/downloads/" ++ p]) photos
     posixTime <- getPOSIXTime
     let outputFile = "/home/damakm/TelegramImageAiBot/results" ++ "/" ++ show posixTime ++ ".png"
     let opts = map unpack ([path, command] ++ promptOpt) ++ photoOpt

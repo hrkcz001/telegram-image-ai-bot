@@ -30,6 +30,8 @@ dependencies:
 - text
 - scientific
 - time
+- hashmap
+- extra
 
 ghc-options:
 - -Wall

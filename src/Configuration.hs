@@ -20,6 +20,7 @@ data Config = Config
   , configInput :: String
   , configOutput :: String
   , configPassword :: String
+  , configWaitingForPhoto :: Int
   , configAdminsNames :: [String]
   , configAdminsIds :: [Int]
   } deriving (Show, Eq, Generic, FromJSON, ToJSON)
@@ -31,6 +32,7 @@ defaultConfig = Config { configToken = "put your token here"
                        , configInput = "put path to your input folder here"
                        , configOutput = "put path to your output folder here"
                        , configPassword = "put bot password here"
+                       , configWaitingForPhoto = 5
                        , configAdminsNames = []
                        , configAdminsIds = []
                        }
