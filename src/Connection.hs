@@ -5,12 +5,14 @@ module Connection
         getFile,
         copyMessage,
         sendMessage,
+        editMessageText,
         sendPhoto,
         changeName,
         downloadFile,
         Token,
         Error(..),
         Msg2Copy(..),
+        Msg2Edit(..),
         Msg2Send(..),
         Photo2Send(..)
     ) where
@@ -24,6 +26,7 @@ type Token = String
 
 data Msg2Copy = Msg2Copy { senderName2Copy :: Maybe Text,  chatId2Copy :: Text, fromChatId2Copy :: Int, messageId2Copy :: Int }
 data Msg2Send = Msg2Send { chatId2Send :: Int, reply2Msg2Send :: Maybe Int, text2Send :: Text}
+data Msg2Edit = Msg2Edit { chatId2Edit :: Int, messageId2Edit :: Int, newText2Edit :: Text } 
 data Photo2Send = Photo2Send { chatId2Photo :: Int, reply2Msg2Photo :: Maybe Int, photo2Send :: FilePath }
 
 data Error = InvalidResponse 
@@ -78,6 +81,16 @@ sendMessage token message = do
                                           ] ++ case reply2Msg2Send message of
                                                 Nothing -> []
                                                 Just msgId -> [ "reply_to_message_id" := msgId ]
+
+editMessageText :: Token -> Msg2Edit -> IO (Either Error (Response ByteString))
+editMessageText token message = do
+                            tryTo $ post url formMsg
+                            where
+                                url = "https://api.telegram.org/bot" ++ token ++ "/editMessageText"
+                                formMsg = [ "chat_id" := chatId2Edit message
+                                          , "message_id" := messageId2Edit message
+                                          , "text" := newText2Edit message
+                                          ]
 
 sendPhoto :: Token -> Photo2Send -> IO (Either Error (Response ByteString))
 sendPhoto token message = do

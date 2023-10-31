@@ -7,7 +7,7 @@ module Logic (
 ) where
 
 import Update (Stack, popUpdate, putError)
-import Connection (Token, Photo2Send(..), Msg2Send(..), getFile, sendMessage, sendPhoto, downloadFile)
+import Connection (Token, Photo2Send(..), Msg2Send(..), Msg2Edit(..), getFile, sendMessage, editMessageText, sendPhoto, downloadFile)
 
 import Data.Text (Text, pack, unpack, take, drop, length, takeWhile)
 import Data.List (singleton)
@@ -157,11 +157,12 @@ processTextMessage stack state text msg
         preparationResponse <- formTextResponse msg "Added to queue."
         preparationResult <- sendMessage token preparationResponse
         case preparationResult of
-            Right _ -> do
+            Right r -> do
+                    let (sentChatId, sentMsgId) = parseSentMsg ( r ^?! responseBody ^?! key "result" )
                     threadDelay (waitingForPhoto * 1000000)
                     lock computeLock
-                    processingResponse <- formTextResponse msg "Processing..."
-                    processingResult <- sendMessage token processingResponse
+                    processingResponse <- formUpdateTextResponse sentChatId sentMsgId "Processing..."
+                    processingResult <- editMessageText token processingResponse
                     case processingResult of
                         Right _ ->  do
                                     let photoId = getPhotoId msg
@@ -243,6 +244,12 @@ checkIfIsAdmin admins msg = do
 senderLogin :: Value -> Maybe Text
 senderLogin msg = msg ^? key "from" . key "username" . _String
 
+parseSentMsg :: Value -> (Int, Int)
+parseSentMsg r = (chatId, msgId)
+                where
+                    chatId = r ^?! key "chat" . key "id" . _Integral
+                    msgId = r ^?! key "message_id" . _Integral
+
 getPhotoId :: Value -> Maybe (Int, Text)
 getPhotoId msg = addSenderId =<< (handlePhotos =<< (msg ^? key "photo"))
                  where addSenderId photoId = Just ( msg ^?! key "chat" . key "id" . _Integral
@@ -313,6 +320,12 @@ formTextResponse msg text = do
                                     (Just (msg ^?! key "message_id" . _Integral))
                                     text
 
+formUpdateTextResponse :: Int -> Int -> Text -> IO Msg2Edit
+formUpdateTextResponse chatId msgId text = do
+                    return $ Msg2Edit
+                                    chatId
+                                    msgId
+                                    text
 
 sysResponse :: Text -> Value -> IO Msg2Send
 sysResponse text msg = do
