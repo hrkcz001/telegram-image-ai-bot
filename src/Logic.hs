@@ -264,6 +264,8 @@ execPython path command output prompt photo = do
     let opts = map unpack ([path, command] ++ promptOpt) ++ photoOpt
     let envVars = [("IMAGINE_OUTPUT", outputFile)]
     putStrLn $ show envVars ++ show ("python3" : opts)
+    (_, _, _, phCp) <- P.createProcess (proc "cp" ["../err.jpg", outputFile]) { std_out = P.CreatePipe }
+    _ <- P.waitForProcess phCp
     (_, Just hout, _, ph) <- P.createProcess (proc "python3" opts) { std_out = P.CreatePipe, env = Just envVars}
     _ <- P.waitForProcess ph
     cmdline <- IO.hGetContents hout
