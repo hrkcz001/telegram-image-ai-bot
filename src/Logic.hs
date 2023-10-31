@@ -30,6 +30,7 @@ data State = State  {   stateToken :: Token
                     ,   stateOutput :: Text
                     ,   statePassword :: Text
                     ,   stateAdmins :: Admins
+                    ,   stateLock :: MVar Int
                     }
 
 data InitOpts = InitOpts    {   initStack :: Stack
@@ -53,8 +54,9 @@ process InitOpts    { initStack = stack
                     , initAdminsIds = adminsIds}  
                     = do
                     adminsIdsMVar <- newMVar adminsIds
+                    lock <- newMVar 0
                     let admins = Admins adminsIdsMVar adminsNames
-                    let state = State token script input output password admins
+                    let state = State token script input output password admins lock
                     _ <- forkIO $ processLoop stack state
                     return adminsIdsMVar
 
@@ -115,7 +117,7 @@ processTextMessage stack state text msg
         case preparationResult of
             Right _ ->  do
                         photo <- getPhoto token stack (stateInput state) msg
-                        response <- formPythonResponse msg (stateScript state) (stateOutput state) (Data.Text.drop 1 text) photo
+                        response <- formPythonResponse msg (stateScript state) (stateOutput state) (stateLock state) (Data.Text.drop 1 text) photo 
                         result <- sendPhoto token response
                         case result of
                             Right _ -> return ()
@@ -200,11 +202,11 @@ downloadPhoto token stack downloadDir photoId = do
                             putError stack e
                             return Nothing
 
-formPythonResponse :: Value -> Text -> Text -> Text -> Maybe String -> IO Photo2Send
-formPythonResponse msg script output text photo = do
+formPythonResponse :: Value -> Text -> Text -> MVar Int -> Text -> Maybe String -> IO Photo2Send
+formPythonResponse msg script output lock text photo = do
                     let command = Data.Text.takeWhile (/= ' ') text
                     let prompt = Data.Text.drop (Data.Text.length command + 1) text
-                    pythonResult <- execPython script command output prompt photo
+                    pythonResult <- execPython lock script command output prompt photo
                     return $ Photo2Send
                                     (msg ^?! key "chat" . key "id" . _Integral)
                                     (Just (msg ^?! key "message_id" . _Integral))
@@ -264,8 +266,9 @@ formQuestionResponse msg = do
                                     (Just (msg ^?! key "message_id" . _Integral))
                                     "???"
 
-execPython :: Text -> Text -> Text -> Text -> Maybe String -> IO String
-execPython path command output prompt photo = do
+execPython :: MVar Int -> Text -> Text -> Text -> Text -> Maybe String -> IO String
+execPython lock path command output prompt photo = do
+    _ <- takeMVar lock
     let promptOpt = case prompt of
                 "" -> []
                 _ -> ["-p", prompt]
@@ -283,4 +286,5 @@ execPython path command output prompt photo = do
     _ <- P.waitForProcess ph
     cmdline <- IO.hGetContents hout
     putStrLn cmdline
+    _ <- putMVar lock 0
     return outputFile
