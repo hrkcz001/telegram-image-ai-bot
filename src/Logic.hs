@@ -260,9 +260,9 @@ execPython path command output prompt photo = do
     posixTime <- getPOSIXTime
     let outputFile = unpack output ++ "/" ++ show posixTime ++ ".png"
     let opts = map unpack ([path, command] ++ promptOpt) ++ photoOpt
-    let envVars = Just [("IMAGINE_OUTPUT", outputFile)]
+    let envVars = [("IMAGINE_OUTPUT", outputFile)]
     putStrLn $ show envVars ++ show ("python3" : opts)
-    (_, Just hout, _, ph) <- P.createProcess (proc "python3" opts) { std_out = P.CreatePipe, env = envVars}
+    (_, Just hout, _, ph) <- P.createProcess (proc "python3" opts) { std_out = P.CreatePipe, env = Just envVars}
     _ <- P.waitForProcess ph
     cmdline <- IO.hGetContents hout
     putStrLn cmdline
