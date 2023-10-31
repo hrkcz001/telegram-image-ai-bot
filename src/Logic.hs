@@ -90,12 +90,6 @@ processMessage stack state message = do
 processTextMessage :: Stack -> State -> Text -> Value -> IO ()
 processTextMessage stack state text msg
     | match "!" = return ()
-    | match "/sys" = do
-        response <- sysResponse (Data.Text.drop 5 text) msg
-        result <- sendMessage token response
-        case result of
-            Right _ -> return ()
-            Left e -> putError stack e
     | match "/ping" = do
         response <- formEchoResponse text msg
         result <- sendMessage token response
@@ -105,6 +99,12 @@ processTextMessage stack state text msg
     | login = do
         appendAdmin admins msg
         response <- formLoginResponse msg
+        result <- sendMessage token response
+        case result of
+            Right _ -> return ()
+            Left e -> putError stack e
+    | match "/sys" = adminCommand $ do
+        response <- sysResponse (Data.Text.drop 5 text) msg
         result <- sendMessage token response
         case result of
             Right _ -> return ()
