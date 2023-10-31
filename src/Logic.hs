@@ -29,6 +29,21 @@ data Admins = Admins { adminsId :: MVar [Int], adminsName :: [Text] }
 
 type Photos = MVar (HashMap.Map Int [Text])
 
+type Lock = MVar Int
+
+lock :: Lock -> IO ()
+lock mvar = do 
+            _ <- takeMVar mvar
+            return ()
+
+unlock :: Lock -> IO ()
+unlock mvar = putMVar mvar 0
+
+wait :: Lock -> IO ()
+wait mvar = do
+            _ <- takeMVar mvar
+            putMVar mvar 0
+
 data State = State  {   stateToken :: Token
                     ,   stateScript :: Text
                     ,   stateInput :: Text
@@ -37,7 +52,8 @@ data State = State  {   stateToken :: Token
                     ,   stateWaitingForPhoto :: Int
                     ,   stateAdmins :: Admins
                     ,   statePhotos :: Photos
-                    ,   stateLock :: MVar Int
+                    ,   stateComputeLock :: Lock
+                    ,   stateDownloadingLock :: Lock
                     }
 
 data InitOpts = InitOpts    {   initStack :: Stack
@@ -63,10 +79,11 @@ process InitOpts    { initStack = stack
                     , initAdminsIds = adminsIds}  
                     = do
                     adminsIdsMVar <- newMVar adminsIds
-                    lock <- newMVar 0
+                    computeLock <- newMVar 0
+                    downloadLock <- newMVar 0
                     photos <- newMVar HashMap.empty
                     let admins = Admins adminsIdsMVar adminsNames
-                    let state = State token script input output password waitingForPhoto admins photos lock
+                    let state = State token script input output password waitingForPhoto admins photos computeLock downloadLock
                     _ <- forkIO $ processLoop stack state
                     return adminsIdsMVar
 
@@ -125,7 +142,7 @@ processTextMessage stack state text msg
             Left e -> putError stack e
     | login = do
         appendAdmin admins msg
-        response <- formLoginResponse msg
+        response <- formTextResponse msg "Logged in!"
         result <- sendMessage token response
         case result of
             Right _ -> return ()
@@ -142,32 +159,33 @@ processTextMessage stack state text msg
         case preparationResult of
             Right _ -> do
                     threadDelay (waitingForPhoto * 1000000)
-                    _ <- takeMVar (stateLock state)
+                    lock computeLock
                     processingResponse <- formTextResponse msg "Processing..."
                     processingResult <- sendMessage token processingResponse
                     case processingResult of
                         Right _ ->  do
                                     let photoId = getPhotoId msg
-                                    photo <- downloadPhoto token stack input photoId
+                                    photo <- downloadPhoto token stack input photoId downloadLock
                                     case photo of
                                         Nothing -> do
                                                 response <- formPythonResponse msg script output (Data.Text.drop 1 text) []
-                                                putMVar (stateLock state) 0
+                                                unlock computeLock
                                                 result <- sendPhoto token response
                                                 case result of
                                                     Right _ -> return ()
                                                     Left e -> putError stack e
                                         Just photoPath -> do
-                                                prevPhotos <- getPhotos token stack output photos chatId
+                                                prevPhotos <- getPhotos token stack input photos chatId downloadLock
+                                                wait downloadLock
                                                 let photosPaths = prevPhotos ++ [photoPath]
                                                 response <- formPythonResponse msg script output (Data.Text.drop 1 text) photosPaths
-                                                putMVar (stateLock state) 0
+                                                unlock computeLock
                                                 result <- sendPhoto token response
                                                 case result of
                                                     Right _ -> return ()
                                                     Left e -> putError stack e
                         Left e -> do
-                                    putMVar (stateLock state) 0
+                                    unlock computeLock
                                     putError stack e
 
             Left e -> putError stack e
@@ -186,6 +204,8 @@ processTextMessage stack state text msg
         input = stateInput state
         output = stateOutput state
         script = stateScript state
+        computeLock = stateComputeLock state
+        downloadLock = stateDownloadingLock state
         waitingForPhoto = stateWaitingForPhoto state
         chatId = msg ^?! key "chat" . key "id" . _Integral
         adminCommand command = do
@@ -193,7 +213,7 @@ processTextMessage stack state text msg
             if isAdmin
                 then command
                 else do
-                    response <- formNotLoggedInResponse msg
+                    response <- formTextResponse msg "Not logged in!"
                     result <- sendMessage token response
                     case result of
                         Right _ -> return ()
@@ -228,12 +248,11 @@ getPhotoId msg = addSenderId =<< (handlePhotos =<< (msg ^? key "photo"))
                  where addSenderId photoId = Just ( msg ^?! key "chat" . key "id" . _Integral
                                                   , photoId)
 
-getPhotos :: Token -> Stack -> Text -> Photos -> Int -> IO [String]
-getPhotos token stack downloadDir photosMVar chatId = do 
+getPhotos :: Token -> Stack -> Text -> Photos -> Int -> Lock -> IO [String]
+getPhotos token stack downloadDir photosMVar chatId downloadLock = do 
                                                 photos <- takeMVar photosMVar
                                                 let newPhotos = HashMap.delete chatId photos
                                                 putMVar photosMVar newPhotos
-                                                print photos
                                                 case HashMap.lookup chatId photos of
                                                     Just photoIds -> do
                                                         photosPaths <- mapM downloadSingle photoIds
@@ -242,7 +261,7 @@ getPhotos token stack downloadDir photosMVar chatId = do
                                                     where
                                                         downloadSingle photoId = 
                                                             ME.maybeM (return []) (return . Data.List.singleton) $
-                                                            downloadPhoto token stack downloadDir (Just (chatId, photoId))
+                                                            downloadPhoto token stack downloadDir (Just (chatId, photoId)) downloadLock
 
 handlePhotos :: Value -> Maybe Text
 handlePhotos (Array photo) = Just $ handlePhoto (Vector.last photo)
@@ -250,8 +269,8 @@ handlePhotos (Array photo) = Just $ handlePhoto (Vector.last photo)
                                 handlePhoto p = p ^?! key "file_id" . _String
 handlePhotos _ = Nothing
 
-downloadPhoto :: Token -> Stack -> Text -> Maybe (Int, Text) -> IO (Maybe String)
-downloadPhoto token stack downloadDir maybePhotoId = do
+downloadPhoto :: Token -> Stack -> Text -> Maybe (Int, Text) -> Lock -> IO (Maybe String)
+downloadPhoto token stack downloadDir maybePhotoId downloadLock = do
                     case maybePhotoId of
                         Nothing -> return Nothing
                         Just (_, photoId) -> do
@@ -262,15 +281,20 @@ downloadPhoto token stack downloadDir maybePhotoId = do
                                     let fileId = responseFile ^?! responseBody ^?! key "result" . key "file_path" . _String
                                     let downloadPhotoUrl = downloadFile token (unpack fileId)
                                     let pathToPhoto = show posixTime ++ ".jpg"
-                                    (_, Just hout, _, ph) <- P.createProcess (proc "wget" ["-O", unpack downloadDir ++ "/" ++ pathToPhoto, downloadPhotoUrl]) 
-                                        { std_out = P.CreatePipe }
-                                    _ <- P.waitForProcess ph
-                                    cmdline <- IO.hGetContents hout
-                                    putStrLn cmdline
+                                    _ <- forkIO $ execWget pathToPhoto downloadPhotoUrl
                                     return $ Just pathToPhoto
                                 Left e -> do
                                     putError stack e
                                     return Nothing
+                    where execWget p url = do
+                            (_, Just hout, _, ph) <- P.createProcess (proc "wget" ["-O", unpack downloadDir ++ "/" ++ p, url]) 
+                                { std_out = P.CreatePipe }
+                            lock downloadLock
+                            _ <- P.waitForProcess ph
+                            cmdline <- IO.hGetContents hout
+                            putStrLn cmdline
+                            unlock downloadLock
+
 
 formPythonResponse :: Value -> Text -> Text -> Text -> [String] -> IO Photo2Send
 formPythonResponse msg script output text photos = do
@@ -291,31 +315,12 @@ formTextResponse msg text = do
 
 
 sysResponse :: Text -> Value -> IO Msg2Send
---run bash command
 sysResponse text msg = do
                     (_, Just hout, _, ph) <- P.createProcess (proc "zsh" ["-c", unpack text]) { std_out = P.CreatePipe }
                     _ <- P.waitForProcess ph
                     cmdline <- IO.hGetContents hout
                     putStrLn cmdline
-                    return $ Msg2Send
-                                    (msg ^?! key "chat" . key "id" . _Integral)
-                                    (Just (msg ^?! key "message_id" . _Integral))
-                                    (pack cmdline)
-
-
-formLoginResponse :: Value -> IO Msg2Send
-formLoginResponse msg = do
-                    return $ Msg2Send
-                                    (msg ^?! key "chat" . key "id" . _Integral)
-                                    (Just (msg ^?! key "message_id" . _Integral))
-                                    "Logged in!"
-
-formNotLoggedInResponse :: Value -> IO Msg2Send
-formNotLoggedInResponse msg = do
-                    return $ Msg2Send
-                                    (msg ^?! key "chat" . key "id" . _Integral)
-                                    (Just (msg ^?! key "message_id" . _Integral))
-                                    "Not logged in!"
+                    formTextResponse msg (pack cmdline)
 
 formEchoResponse :: Text -> Value -> IO Msg2Send
 formEchoResponse text msg = do
