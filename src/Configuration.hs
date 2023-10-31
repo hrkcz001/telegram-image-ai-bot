@@ -29,8 +29,8 @@ defaultConfig :: Config
 defaultConfig = Config { configToken = "put your token here"
                        , configTimeout = 5
                        , configScript = "put path to your python script here"
-                       , configInput = "put path to your input folder here"
-                       , configOutput = "put path to your output folder here"
+                       , configInput = "../downloads"
+                       , configOutput = "../results"
                        , configPassword = "put bot password here"
                        , configWaitingForPhoto = 5
                        , configAdminsNames = []
