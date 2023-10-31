@@ -17,6 +17,7 @@ data Config = Config
   { configToken :: String
   , configTimeout :: Int
   , configScript :: String
+  , configInput :: String
   , configOutput :: String
   , configPassword :: String
   , configAdminsNames :: [String]
@@ -27,6 +28,7 @@ defaultConfig :: Config
 defaultConfig = Config { configToken = "put your token here"
                        , configTimeout = 5
                        , configScript = "put path to your python script here"
+                       , configInput = "put path to your input folder here"
                        , configOutput = "put path to your output folder here"
                        , configPassword = "put bot password here"
                        , configAdminsNames = []
@@ -67,14 +69,7 @@ readConfig filePath = do
 updateConfigLoop :: FilePath -> Int -> Config -> MVar [Int] -> IO ()
 updateConfigLoop filePath delay config adminsIdsMVar = do
     threadDelay $ delay * 1000000
-    adminsIds <- readMVar $ adminsIdsMVar
-    let newConfig = Config { configToken = configToken config
-                           , configTimeout = configTimeout config
-                           , configScript = configScript config
-                           , configOutput = configOutput config
-                           , configPassword = configPassword config
-                           , configAdminsNames = configAdminsNames config
-                           , configAdminsIds = adminsIds
-                           }
+    adminsIds <- readMVar adminsIdsMVar
+    let newConfig = config { configAdminsIds = adminsIds }
     B.writeFile filePath (encode newConfig)
     updateConfigLoop filePath delay newConfig adminsIdsMVar

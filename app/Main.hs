@@ -20,7 +20,7 @@ main = do
             Nothing -> return ()
             Just config -> do
                         stack <- initBot token updateTimeout
-                        admins <- initLogic token stack script output password adminsNames adminsIds
+                        admins <- initLogic token stack script input output password adminsNames adminsIds
                         _ <- updateConfigLoop configPath delay config admins
                         errorLoop stack
                         where 
@@ -28,6 +28,7 @@ main = do
                             token = configToken config
                             updateTimeout = configTimeout config 
                             script = pack $ configScript config
+                            input = pack $ configInput config
                             output = pack $ configOutput config
                             password = pack $ configPassword config
                             adminsNames = map pack $ configAdminsNames config
@@ -36,9 +37,9 @@ main = do
 initBot :: Token -> Int -> IO Stack
 initBot token timeout = Update.init $ Update.InitOpts token timeout
 
-initLogic :: Token -> Stack -> Text -> Text -> Text -> [Text] -> [Int] -> IO (MVar [Int])
-initLogic token stack script output password adminsNames adminsIds = 
-    Logic.process $ Logic.InitOpts stack token script output password adminsNames adminsIds
+initLogic :: Token -> Stack -> Text -> Text -> Text -> Text -> [Text] -> [Int] -> IO (MVar [Int])
+initLogic token stack script input output password adminsNames adminsIds = 
+    Logic.process $ Logic.InitOpts stack token script input output password adminsNames adminsIds
 
 errorLoop :: Stack -> IO ()
 errorLoop stack = do

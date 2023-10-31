@@ -2,10 +2,12 @@
 
 module Connection
     (   getUpdate,
+        getFile,
         copyMessage,
         sendMessage,
         sendPhoto,
         changeName,
+        downloadFile,
         Token,
         Error(..),
         Msg2Copy(..),
@@ -13,9 +15,9 @@ module Connection
         Photo2Send(..)
     ) where
 
-import Data.Text (Text)
-import Network.Wreq
-import Data.ByteString.Lazy as ByteString
+import Data.Text (Text, unpack)
+import Network.Wreq 
+import Data.ByteString.Lazy as ByteString hiding (unpack)
 import Control.Exception (try, SomeException)
 
 type Token = String
@@ -38,6 +40,8 @@ tryTo action = do
                     Right r -> return $ Right r
                     Left e -> return $ Left $ Exception e
 
+--GET
+
 getUpdate :: Token -> Int -> Int -> IO (Either Error (Response ByteString))
 getUpdate token timeout offset = do
                             tryTo $ get url
@@ -45,6 +49,14 @@ getUpdate token timeout offset = do
                                 url =  "https://api.telegram.org/bot" ++ token 
                                     ++ "/getUpdates?offset=" ++ show offset 
                                     ++ "&timeout=" ++ show timeout
+
+getFile :: Token -> Text -> IO (Either Error (Response ByteString))
+getFile token fileId = do
+                            tryTo $ get url
+                            where
+                                url = "https://api.telegram.org/bot" ++ token ++ "/getFile?file_id=" ++ unpack fileId
+
+--POST
 
 copyMessage :: Token -> Msg2Copy -> IO (Either Error (Response ByteString))
 copyMessage token message = do
@@ -84,3 +96,6 @@ changeName token newName =  do
                             where
                                 url = "https://api.telegram.org/bot" ++ token ++ "/setMyName"
                                 formMsg = [ "name" := newName ]
+
+downloadFile :: Token -> String -> String
+downloadFile token file = "https://api.telegram.org/file/bot" ++ token ++ "/" ++ file
