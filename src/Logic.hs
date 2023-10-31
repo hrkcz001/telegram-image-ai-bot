@@ -183,8 +183,8 @@ downloadPhoto token stack downloadDir photoId = do
                             posixTime <- getPOSIXTime
                             let fileId = responseFile ^?! responseBody ^?! key "result" . key "file_path" . _String
                             let downloadPhotoUrl = downloadFile token (unpack fileId)
-                            let pathToPhoto = unpack downloadDir ++ "/" ++ show posixTime ++ ".jpg"
-                            (_, Just hout, _, ph) <- P.createProcess (proc "wget" [downloadPhotoUrl, "-o", pathToPhoto]) 
+                            let pathToPhoto = show posixTime ++ ".jpg"
+                            (_, Just hout, _, ph) <- P.createProcess (proc "wget" [downloadPhotoUrl, "-o", unpack downloadDir ++ "/" ++ pathToPhoto]) 
                                 { std_out = P.CreatePipe }
                             _ <- P.waitForProcess ph
                             cmdline <- IO.hGetContents hout
@@ -255,7 +255,7 @@ execPython :: Text -> Text -> Text -> Text -> Maybe String -> IO String
 execPython path command output prompt photo = do
     let promptOpt = ["-p", prompt]
     let photoOpt = case photo of
-                Just p -> ["-i", p]
+                Just p -> ["-i", "/home/damakm/TelegramImageAiBot/downloads/" ++ p]
                 Nothing -> []
     posixTime <- getPOSIXTime
     let outputFile = unpack output ++ "/" ++ show posixTime ++ ".png"
