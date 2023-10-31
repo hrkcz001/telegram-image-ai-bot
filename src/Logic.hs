@@ -253,7 +253,9 @@ formQuestionResponse msg = do
 
 execPython :: Text -> Text -> Text -> Text -> Maybe String -> IO String
 execPython path command output prompt photo = do
-    let promptOpt = ["-p", prompt]
+    let promptOpt = case prompt of
+                "" -> []
+                _ -> ["-p", prompt]
     let photoOpt = case photo of
                 Just p -> ["-i", "/home/damakm/TelegramImageAiBot/downloads/" ++ p]
                 Nothing -> []
