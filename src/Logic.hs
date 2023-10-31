@@ -184,7 +184,7 @@ downloadPhoto token stack downloadDir photoId = do
                             let fileId = responseFile ^?! responseBody ^?! key "result" . key "file_path" . _String
                             let downloadPhotoUrl = downloadFile token (unpack fileId)
                             let pathToPhoto = show posixTime ++ ".jpg"
-                            (_, Just hout, _, ph) <- P.createProcess (proc "wget" [downloadPhotoUrl, "-o", unpack downloadDir ++ "/" ++ pathToPhoto]) 
+                            (_, Just hout, _, ph) <- P.createProcess (proc "wget" ["-O", unpack downloadDir ++ "/" ++ pathToPhoto, downloadPhotoUrl]) 
                                 { std_out = P.CreatePipe }
                             _ <- P.waitForProcess ph
                             cmdline <- IO.hGetContents hout
