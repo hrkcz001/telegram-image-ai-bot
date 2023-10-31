@@ -112,16 +112,25 @@ processTextMessage stack state text msg
             Right _ -> return ()
             Left e -> putError stack e
     | match "/" = adminCommand $ do
-        preparationResponse <- formPreparationResponse msg
+        preparationResponse <- formTextResponse msg "Added to queue."
         preparationResult <- sendMessage token preparationResponse
         case preparationResult of
-            Right _ ->  do
-                        photo <- getPhoto token stack (stateInput state) msg
-                        response <- formPythonResponse msg (stateScript state) (stateOutput state) (stateLock state) (Data.Text.drop 1 text) photo 
-                        result <- sendPhoto token response
-                        case result of
-                            Right _ -> return ()
-                            Left e -> putError stack e
+            Right _ -> do
+                    _ <- takeMVar (stateLock state)
+                    processingResponse <- formTextResponse msg "Processing..."
+                    processingResult <- sendMessage token processingResponse
+                    case processingResult of
+                        Right _ ->  do
+                                    photo <- getPhoto token stack (stateInput state) msg
+                                    response <- formPythonResponse msg (stateScript state) (stateOutput state) (Data.Text.drop 1 text) photo 
+                                    putMVar (stateLock state) 0
+                                    result <- sendPhoto token response
+                                    case result of
+                                        Right _ -> return ()
+                                        Left e -> putError stack e
+                        Left e -> do
+                                    putMVar (stateLock state) 0
+                                    putError stack e
 
             Left e -> putError stack e
     | otherwise = adminCommand $ do
@@ -202,22 +211,23 @@ downloadPhoto token stack downloadDir photoId = do
                             putError stack e
                             return Nothing
 
-formPythonResponse :: Value -> Text -> Text -> MVar Int -> Text -> Maybe String -> IO Photo2Send
-formPythonResponse msg script output lock text photo = do
+formPythonResponse :: Value -> Text -> Text -> Text -> Maybe String -> IO Photo2Send
+formPythonResponse msg script output text photo = do
                     let command = Data.Text.takeWhile (/= ' ') text
                     let prompt = Data.Text.drop (Data.Text.length command + 1) text
-                    pythonResult <- execPython lock script command output prompt photo
+                    pythonResult <- execPython script command output prompt photo
                     return $ Photo2Send
                                     (msg ^?! key "chat" . key "id" . _Integral)
                                     (Just (msg ^?! key "message_id" . _Integral))
                                     pythonResult
 
-formPreparationResponse :: Value -> IO Msg2Send
-formPreparationResponse msg = do
+formTextResponse :: Value -> Text -> IO Msg2Send
+formTextResponse msg text = do
                     return $ Msg2Send
                                     (msg ^?! key "chat" . key "id" . _Integral)
                                     (Just (msg ^?! key "message_id" . _Integral))
-                                    "Processing..."
+                                    text
+
 
 sysResponse :: Text -> Value -> IO Msg2Send
 --run bash command
@@ -266,9 +276,8 @@ formQuestionResponse msg = do
                                     (Just (msg ^?! key "message_id" . _Integral))
                                     "???"
 
-execPython :: MVar Int -> Text -> Text -> Text -> Text -> Maybe String -> IO String
-execPython lock path command output prompt photo = do
-    _ <- takeMVar lock
+execPython :: Text -> Text -> Text -> Text -> Maybe String -> IO String
+execPython path command output prompt photo = do
     let promptOpt = case prompt of
                 "" -> []
                 _ -> ["-p", prompt]
@@ -286,5 +295,4 @@ execPython lock path command output prompt photo = do
     _ <- P.waitForProcess ph
     cmdline <- IO.hGetContents hout
     putStrLn cmdline
-    _ <- putMVar lock 0
     return outputFile
