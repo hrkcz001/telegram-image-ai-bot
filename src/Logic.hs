@@ -110,11 +110,17 @@ processTextMessage stack state text msg
             Right _ -> return ()
             Left e -> putError stack e
     | match "/" = adminCommand $ do
-        photo <- getPhoto token stack (stateInput state) msg
-        response <- formPythonResponse msg (stateScript state) (stateOutput state) (Data.Text.drop 1 text) photo
-        result <- sendPhoto token response
-        case result of
-            Right _ -> return ()
+        preparationResponse <- formPreparationResponse msg
+        preparationResult <- sendMessage token preparationResponse
+        case preparationResult of
+            Right _ ->  do
+                        photo <- getPhoto token stack (stateInput state) msg
+                        response <- formPythonResponse msg (stateScript state) (stateOutput state) (Data.Text.drop 1 text) photo
+                        result <- sendPhoto token response
+                        case result of
+                            Right _ -> return ()
+                            Left e -> putError stack e
+
             Left e -> putError stack e
     | otherwise = adminCommand $ do
         response <- formQuestionResponse msg
@@ -203,6 +209,13 @@ formPythonResponse msg script output text photo = do
                                     (msg ^?! key "chat" . key "id" . _Integral)
                                     (Just (msg ^?! key "message_id" . _Integral))
                                     pythonResult
+
+formPreparationResponse :: Value -> IO Msg2Send
+formPreparationResponse msg = do
+                    return $ Msg2Send
+                                    (msg ^?! key "chat" . key "id" . _Integral)
+                                    (Just (msg ^?! key "message_id" . _Integral))
+                                    "Processing..."
 
 sysResponse :: Text -> Value -> IO Msg2Send
 --run bash command
