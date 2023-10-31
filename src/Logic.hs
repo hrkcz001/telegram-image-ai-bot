@@ -258,7 +258,7 @@ execPython path command output prompt photo = do
                 Just p -> ["-i", "/home/damakm/TelegramImageAiBot/downloads/" ++ p]
                 Nothing -> []
     posixTime <- getPOSIXTime
-    let outputFile = unpack output ++ "/" ++ show posixTime ++ ".png"
+    let outputFile = "/home/damakm/TelegramImageAiBot/results" ++ "/" ++ show posixTime ++ ".png"
     let opts = map unpack ([path, command] ++ promptOpt) ++ photoOpt
     let envVars = [("IMAGINE_OUTPUT", outputFile)]
     putStrLn $ show envVars ++ show ("python3" : opts)
