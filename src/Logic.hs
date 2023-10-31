@@ -47,7 +47,6 @@ data InitOpts = InitOpts    {   initStack :: Stack
                             ,   initOutput :: Text
                             ,   initPassword :: Text
                             ,   initWaitingForPhoto :: Int
-                            ,   initUpdateTimeout :: Int
                             ,   initAdminsNames :: [Text]
                             ,   initAdminsIds :: [Int]
                             }
