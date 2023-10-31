@@ -9,7 +9,7 @@ module Logic (
 import Update (Stack, popUpdate, putError)
 import Connection (Token, Photo2Send(..), Msg2Send(..), getFile, sendMessage, sendPhoto, downloadFile)
 
-import Data.Text (Text, pack, unpack, take, drop, length)
+import Data.Text (Text, pack, unpack, take, drop, length, takeWhile)
 import qualified Data.Vector as Vector
 import Data.Aeson
 import Data.Aeson.Lens
@@ -103,16 +103,22 @@ processTextMessage stack state text msg
         case result of
             Right _ -> return ()
             Left e -> putError stack e
-    | match "/sys" = adminCommand $ do
+    | match "/sys " = adminCommand $ do
         response <- sysResponse (Data.Text.drop 5 text) msg
         result <- sendMessage token response
         case result of
             Right _ -> return ()
             Left e -> putError stack e
-    | otherwise = adminCommand $ do
+    | match "/" = adminCommand $ do
         photo <- getPhoto token stack (stateInput state) msg
-        response <- formPythonResponse msg (stateScript state) (stateOutput state) text photo
+        response <- formPythonResponse msg (stateScript state) (stateOutput state) (Data.Text.drop 1 text) photo
         result <- sendPhoto token response
+        case result of
+            Right _ -> return ()
+            Left e -> putError stack e
+    | otherwise = adminCommand $ do
+        response <- formQuestionResponse msg
+        result <- sendMessage token response
         case result of
             Right _ -> return ()
             Left e -> putError stack e
@@ -174,21 +180,25 @@ downloadPhoto token stack downloadDir photoId = do
                     getFileAttempt <- getFile token photoId
                     case getFileAttempt of
                         Right responseFile -> do
+                            posixTime <- getPOSIXTime
                             let fileId = responseFile ^?! responseBody ^?! key "result" . key "file_path" . _String
                             let downloadPhotoUrl = downloadFile token (unpack fileId)
-                            putStrLn downloadPhotoUrl
-                            (_, Just hout, _, ph) <- P.createProcess (proc "wget" [downloadPhotoUrl]) { std_out = P.CreatePipe }
+                            let pathToPhoto = unpack downloadDir ++ "/" ++ show posixTime ++ ".jpg"
+                            (_, Just hout, _, ph) <- P.createProcess (proc "wget" [downloadPhotoUrl, "-o", pathToPhoto]) 
+                                { std_out = P.CreatePipe }
                             _ <- P.waitForProcess ph
                             cmdline <- IO.hGetContents hout
                             putStrLn cmdline
-                            return $ Just ""
+                            return $ Just pathToPhoto
                         Left e -> do
                             putError stack e
                             return Nothing
 
 formPythonResponse :: Value -> Text -> Text -> Text -> Maybe String -> IO Photo2Send
-formPythonResponse msg script output prompt photo = do
-                    pythonResult <- execPython script output prompt photo
+formPythonResponse msg script output text photo = do
+                    let command = Data.Text.takeWhile (/= ' ') text
+                    let prompt = Data.Text.drop (Data.Text.length command + 1) text
+                    pythonResult <- execPython script command output prompt photo
                     return $ Photo2Send
                                     (msg ^?! key "chat" . key "id" . _Integral)
                                     (Just (msg ^?! key "message_id" . _Integral))
@@ -241,14 +251,15 @@ formQuestionResponse msg = do
                                     (Just (msg ^?! key "message_id" . _Integral))
                                     "???"
 
-execPython :: Text -> Text -> Text -> Maybe String -> IO String
-execPython path output prompt photo = do
-    let str = case photo of
-                Just p -> p
-                Nothing -> "" 
+execPython :: Text -> Text -> Text -> Text -> Maybe String -> IO String
+execPython path command output prompt photo = do
+    let promptOpt = ["-p", prompt]
+    let photoOpt = case photo of
+                Just p -> ["-i", "/home/damakm/TelegramImageAiBot/downloads/" ++ p]
+                Nothing -> []
     posixTime <- getPOSIXTime
     let outputFile = unpack output ++ "/" ++ show posixTime ++ ".png"
-    let opts = [unpack path, unpack prompt]
+    let opts = map unpack ([command, path] ++ promptOpt) ++ photoOpt
     let envVars = Just [("IMAGINE_OUTPUT", outputFile)]
     (_, Just hout, _, ph) <- P.createProcess (proc "python3" opts) { std_out = P.CreatePipe, env = envVars}
     _ <- P.waitForProcess ph
